@@ -1,0 +1,736 @@
+// ============================================================
+//  ExploreHimalaya — Prisma Schema
+//  AI-powered Nepal Trekking & Tourism Booking Platform
+//
+//  Run:  npx prisma generate
+//        npx prisma migrate dev --name init
+//        npx tsx prisma/seed.ts
+// ============================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "fullTextIndex"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Neon / Supabase edge-compatible pool (uncomment when using those providers)
+  // directUrl = env("DIRECT_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+//  ENUMS
+// ─────────────────────────────────────────────────────────────
+
+enum UserRole {
+  TRAVELER
+  PROVIDER
+  ADMIN
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum Difficulty {
+  EASY
+  MODERATE
+  CHALLENGING
+  STRENUOUS
+  EXTREME
+}
+
+enum TrekStatus {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+  REFUNDED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  REFUNDED
+  FAILED
+  DISPUTED
+}
+
+enum PaymentMethod {
+  CREDIT_CARD
+  DEBIT_CARD
+  BANK_TRANSFER
+  PAYPAL
+  STRIPE
+  ESEWA          // Nepal's leading digital wallet
+  KHALTI         // Popular Nepal fintech
+  CONNECTIPS     // Nepal interbank payment
+  CASH
+}
+
+enum PaymentType {
+  DEPOSIT        // Partial upfront payment
+  FULL           // Full amount
+  BALANCE        // Remaining balance after deposit
+  REFUND
+}
+
+enum ProviderType {
+  TREKKING_AGENCY
+  INDEPENDENT_GUIDE
+  HOTEL
+  TEAHOUSE
+  ADVENTURE_COMPANY
+}
+
+enum Season {
+  SPRING  // Mar–May
+  SUMMER  // Jun–Aug
+  AUTUMN  // Sep–Nov
+  WINTER  // Dec–Feb
+}
+
+enum MealPlan {
+  NONE
+  BREAKFAST_ONLY
+  HALF_BOARD       // Breakfast + Dinner
+  FULL_BOARD       // All meals
+}
+
+enum AvailabilityStatus {
+  OPEN
+  FILLING_FAST
+  FULLY_BOOKED
+  CLOSED
+}
+
+// ─────────────────────────────────────────────────────────────
+//  USER
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  passwordHash  String
+  name          String
+  displayName   String?
+  avatarUrl     String?
+  phone         String?
+  phoneVerified Boolean   @default(false)
+  nationality   String?                       // ISO 3166-1 alpha-2 (e.g. "US", "DE")
+  passportNumber String?
+  dateOfBirth   DateTime? @db.Date
+  gender        Gender?
+  bio           String?   @db.Text
+  role          UserRole  @default(TRAVELER)
+  isActive      Boolean   @default(true)
+  isBanned      Boolean   @default(false)
+  banReason     String?
+  lastLoginAt   DateTime?
+  lastLoginIp   String?
+
+  // Emergency contact
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  emergencyContactRel   String?              // "spouse", "parent", etc.
+
+  // Preferences
+  preferredLanguage String  @default("en")
+  currency          String  @default("USD")
+  newsletterOptIn   Boolean @default(false)
+
+  // Relations
+  bookings       Booking[]
+  reviews        Review[]
+  payments       Payment[]
+  refreshTokens  RefreshToken[]
+  providerProfile Provider?
+  wishlist       WishlistItem[]
+  notifications  Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@index([role])
+  @@index([isActive])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PROVIDER
+//  A User with role=PROVIDER also has one Provider profile.
+// ─────────────────────────────────────────────────────────────
+
+model Provider {
+  id              String       @id @default(cuid())
+  userId          String       @unique
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  companyName     String
+  providerType    ProviderType
+  licenseNumber   String?      @unique  // Nepal Tourism Board license
+  licenseExpiry   DateTime?    @db.Date
+  isVerified      Boolean      @default(false)
+  verifiedAt      DateTime?
+  verifiedBy      String?                              // admin userId who verified
+
+  description     String?      @db.Text
+  logoUrl         String?
+  websiteUrl      String?
+  establishedYear Int?
+
+  // Location
+  address         String?
+  city            String       @default("Kathmandu")
+  province        String?      // Nepal has 7 provinces
+  country         String       @default("Nepal")
+  latitude        Float?
+  longitude       Float?
+
+  // Stats (denormalised for performance)
+  totalTreks      Int          @default(0)
+  avgRating       Float        @default(0)
+  totalReviews    Int          @default(0)
+  totalBookings   Int          @default(0)
+
+  // Social
+  facebookUrl     String?
+  instagramUrl    String?
+  tripadvisorUrl  String?
+
+  // Payment info (for payouts)
+  bankName        String?
+  bankAccount     String?
+  taxId           String?
+
+  treks           Trek[]
+  documents       ProviderDocument[]
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([providerType])
+  @@index([isVerified])
+  @@index([city])
+  @@map("providers")
+}
+
+model ProviderDocument {
+  id           String   @id @default(cuid())
+  providerId   String
+  provider     Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  docType      String                     // "license", "insurance", "certificate"
+  fileUrl      String
+  fileName     String
+  isVerified   Boolean  @default(false)
+  uploadedAt   DateTime @default(now())
+
+  @@index([providerId])
+  @@map("provider_documents")
+}
+
+// ─────────────────────────────────────────────────────────────
+//  CATEGORY & TAG  (for filtering / search)
+// ─────────────────────────────────────────────────────────────
+
+model Category {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  slug        String  @unique
+  description String?
+  iconUrl     String?
+  sortOrder   Int     @default(0)
+  treks       Trek[]
+
+  @@map("categories")
+}
+
+model Tag {
+  id    String     @id @default(cuid())
+  name  String     @unique
+  slug  String     @unique
+  treks TrekTag[]
+
+  @@map("tags")
+}
+
+model TrekTag {
+  trekId String
+  tagId  String
+  trek   Trek   @relation(fields: [trekId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([trekId, tagId])
+  @@map("trek_tags")
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TREK  (core listing model)
+// ─────────────────────────────────────────────────────────────
+
+model Trek {
+  id          String     @id @default(cuid())
+  slug        String     @unique
+  status      TrekStatus @default(DRAFT)
+
+  // Core fields
+  title       String
+  description String     @db.Text
+  highlights  String[]                 // Key selling points (array)
+  includes    String[]                 // What's included
+  excludes    String[]                 // What's NOT included
+  requirements String[]               // Physical / visa / gear requirements
+
+  // Location
+  region      String                   // "Khumbu", "Annapurna", "Langtang", …
+  location    String                   // e.g. "Lukla → Everest Base Camp"
+  country     String     @default("Nepal")
+  startPoint  String                   // e.g. "Lukla"
+  endPoint    String                   // e.g. "Lukla" (round trip) or "Pokhara"
+  latitude    Float?                   // Approximate centre coordinate
+  longitude   Float?
+
+  // Trekking specifics
+  difficulty  Difficulty
+  durationDays Int                     // Total trek days
+  altitude    Int                      // Max altitude in metres
+  distanceKm  Float?                   // Approx total km
+  minAge      Int        @default(12)
+  maxAge      Int        @default(75)
+  minGroupSize Int       @default(1)
+  maxGroupSize Int       @default(16)
+
+  // Seasonality
+  bestSeason  Season[]                 // Best seasons (can be multiple)
+  openMonths  Int[]                    // 1–12 months when route is open
+
+  // Pricing
+  priceUsd       Float                 // Base price per person (USD)
+  priceNpr       Float?                // Price in Nepalese Rupees
+  depositPercent Int      @default(20) // % required to confirm booking
+  mealPlan       MealPlan @default(FULL_BOARD)
+
+  // Permits & logistics
+  permitRequired  Boolean @default(true)
+  permitCost      Float?               // USD per person
+  permitName      String?              // "TIMS", "Annapurna Conservation"
+  guideRequired   Boolean @default(true)
+  porterAvailable Boolean @default(true)
+
+  // Media
+  imageUrl        String?              // Cover image
+  images          String[]             // Gallery
+  videoUrl        String?
+  mapImageUrl     String?
+  gpxFileUrl      String?
+
+  // AI-generated fields
+  aiSummary       String?  @db.Text   // Generated by Claude / GPT
+  aiDifficulty    String?             // AI-assessed difficulty note
+  aiPackingList   String[] 
+
+  // SEO
+  metaTitle       String?
+  metaDescription String?
+
+  // Ratings cache (updated after each review)
+  avgRating       Float    @default(0)
+  totalReviews    Int      @default(0)
+  totalBookings   Int      @default(0)
+
+  // Relations
+  providerId      String
+  provider        Provider     @relation(fields: [providerId], references: [id])
+  categoryId      String?
+  category        Category?    @relation(fields: [categoryId], references: [id])
+  tags            TrekTag[]
+  itinerary       Itinerary[]
+  availabilities  Availability[]
+  bookings        Booking[]
+  reviews         Review[]
+  wishlistItems   WishlistItem[]
+  faqItems        TrekFAQ[]
+  elevationPoints ElevationPoint[]
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  // ── Indexes for search & filter ──
+  @@index([status])
+  @@index([location])
+  @@index([region])
+  @@index([difficulty])
+  @@index([priceUsd])
+  @@index([altitude])
+  @@index([durationDays])
+  @@index([avgRating])
+  @@index([providerId])
+  @@index([categoryId])
+  // Composite: common filter combination
+  @@index([status, difficulty, priceUsd])
+  @@index([status, region, difficulty])
+  @@map("treks")
+}
+
+// Day-by-day itinerary
+model Itinerary {
+  id            String  @id @default(cuid())
+  trekId        String
+  trek          Trek    @relation(fields: [trekId], references: [id], onDelete: Cascade)
+  dayNumber     Int
+  title         String
+  description   String  @db.Text
+  distanceKm    Float?
+  altitudeM     Int?
+  accommodation String?
+  meals         String?                // "Breakfast, Lunch, Dinner"
+  highlights    String[]
+
+  @@unique([trekId, dayNumber])
+  @@index([trekId])
+  @@map("itineraries")
+}
+
+// Elevation profile points (for 3D chart in frontend)
+model ElevationPoint {
+  id        String @id @default(cuid())
+  trekId    String
+  trek      Trek   @relation(fields: [trekId], references: [id], onDelete: Cascade)
+  dayNumber Int
+  locationName String
+  altitudeM Int
+
+  @@unique([trekId, dayNumber])
+  @@index([trekId])
+  @@map("elevation_points")
+}
+
+// FAQs per trek
+model TrekFAQ {
+  id       String @id @default(cuid())
+  trekId   String
+  trek     Trek   @relation(fields: [trekId], references: [id], onDelete: Cascade)
+  question String
+  answer   String @db.Text
+  sortOrder Int   @default(0)
+
+  @@index([trekId])
+  @@map("trek_faqs")
+}
+
+// ─────────────────────────────────────────────────────────────
+//  AVAILABILITY
+//  Manages date-based slot inventory for each trek.
+// ─────────────────────────────────────────────────────────────
+
+model Availability {
+  id           String             @id @default(cuid())
+  trekId       String
+  trek         Trek               @relation(fields: [trekId], references: [id], onDelete: Cascade)
+
+  startDate    DateTime           @db.Date
+  endDate      DateTime           @db.Date         // startDate + durationDays
+  totalSlots   Int
+  bookedSlots  Int                @default(0)
+  status       AvailabilityStatus @default(OPEN)
+
+  // Optional price override for this specific date window
+  priceOverrideUsd Float?
+  notes            String?        // "Peak season surcharge", etc.
+  isActive         Boolean        @default(true)
+
+  bookings     Booking[]
+
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([trekId, startDate])
+  @@index([trekId, startDate, status])
+  @@index([startDate])
+  @@index([status])
+  @@map("availabilities")
+}
+
+// ─────────────────────────────────────────────────────────────
+//  BOOKING
+// ─────────────────────────────────────────────────────────────
+
+model Booking {
+  id             String        @id @default(cuid())
+  reference      String        @unique          // e.g. "EH-2024-ABC123"
+
+  // Relations
+  userId         String
+  user           User          @relation(fields: [userId], references: [id])
+  trekId         String
+  trek           Trek          @relation(fields: [trekId], references: [id])
+  availabilityId String?
+  availability   Availability? @relation(fields: [availabilityId], references: [id])
+
+  // Booking details
+  startDate      DateTime      @db.Date
+  groupSize      Int
+  mealPlan       MealPlan      @default(FULL_BOARD)
+
+  // Pricing breakdown (stored at time of booking to handle price changes)
+  unitPriceUsd   Float                           // Price per person when booked
+  subtotalUsd    Float                           // unitPrice × groupSize
+  discountUsd    Float         @default(0)
+  taxUsd         Float         @default(0)
+  totalUsd       Float                           // Final amount due
+  currency       String        @default("USD")
+
+  // Status
+  status         BookingStatus @default(PENDING)
+  paymentStatus  PaymentStatus @default(UNPAID)
+  paidAmountUsd  Float         @default(0)
+
+  // Guest info (may differ from account name)
+  guestName      String
+  guestEmail     String
+  guestPhone     String?
+  guestNationality String?
+  specialRequests  String?     @db.Text
+  medicalNotes     String?     @db.Text
+
+  // Trekkers list (for groups)
+  trekkers       Trekker[]
+
+  // Cancellation
+  cancelledAt      DateTime?
+  cancellationNote String?
+  refundAmountUsd  Float?
+
+  // Confirmation & completion
+  confirmedAt      DateTime?
+  completedAt      DateTime?
+  guideAssigned    String?    // Guide name
+  porterAssigned   Boolean    @default(false)
+
+  // Relations
+  payments       Payment[]
+  review         Review?     // One review per booking
+
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([userId])
+  @@index([trekId])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([startDate])
+  @@index([reference])
+  @@index([createdAt])
+  @@map("bookings")
+}
+
+// Individual trekker details for group bookings
+model Trekker {
+  id             String   @id @default(cuid())
+  bookingId      String
+  booking        Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  fullName       String
+  nationality    String?
+  passportNumber String?
+  dateOfBirth    DateTime? @db.Date
+  insuranceCompany String?
+  insurancePolicyNo String?
+
+  @@index([bookingId])
+  @@map("trekkers")
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PAYMENT
+// ─────────────────────────────────────────────────────────────
+
+model Payment {
+  id              String        @id @default(cuid())
+  bookingId       String
+  booking         Booking       @relation(fields: [bookingId], references: [id])
+  userId          String
+  user            User          @relation(fields: [userId], references: [id])
+
+  // Payment details
+  amountUsd       Float
+  currency        String        @default("USD")
+  exchangeRate    Float?        @default(1)      // to USD at time of payment
+  amountLocal     Float?                         // in local currency (e.g. NPR)
+
+  paymentType     PaymentType
+  paymentMethod   PaymentMethod
+  status          PaymentStatus @default(UNPAID)
+
+  // Gateway details
+  gatewayName     String?                        // "Stripe", "eSewa", "Khalti"
+  gatewayTxId     String?       @unique          // Gateway transaction ID
+  gatewayResponse Json?                          // Raw gateway response
+
+  // Metadata
+  paidAt          DateTime?
+  failedAt        DateTime?
+  failureReason   String?
+  refundedAt      DateTime?
+  refundReason    String?
+  notes           String?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([bookingId])
+  @@index([userId])
+  @@index([status])
+  @@index([gatewayTxId])
+  @@index([createdAt])
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────────────────────
+//  REVIEW
+// ─────────────────────────────────────────────────────────────
+
+model Review {
+  id        String  @id @default(cuid())
+  userId    String
+  user      User    @relation(fields: [userId], references: [id])
+  trekId    String
+  trek      Trek    @relation(fields: [trekId], references: [id], onDelete: Cascade)
+  bookingId String? @unique             // One review per booking (optional link)
+  booking   Booking? @relation(fields: [bookingId], references: [id])
+
+  // Ratings (1–5)
+  overallRating    Int
+  sceneryRating    Int      @default(0)
+  guideRating      Int      @default(0)
+  valueRating      Int      @default(0)
+  difficultyRating Int      @default(0)  // How well actual matched advertised
+  safetyRating     Int      @default(0)
+
+  title            String
+  body             String   @db.Text
+
+  // Media
+  photoUrls        String[]
+  videoUrl         String?
+
+  // Moderation
+  isVerified       Boolean  @default(false)  // Has completed booking for this trek
+  isVisible        Boolean  @default(true)
+  isFeatured       Boolean  @default(false)
+  moderatedAt      DateTime?
+  moderatedBy      String?
+
+  // Helpful votes
+  helpfulVotes     Int      @default(0)
+  reportCount      Int      @default(0)
+
+  // Provider response
+  providerReply    String?  @db.Text
+  providerRepliedAt DateTime?
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([userId, trekId])              // One review per user per trek
+  @@index([trekId, isVisible])
+  @@index([userId])
+  @@index([overallRating])
+  @@index([isVerified])
+  @@index([isFeatured])
+  @@map("reviews")
+}
+
+// ─────────────────────────────────────────────────────────────
+//  WISHLIST
+// ─────────────────────────────────────────────────────────────
+
+model WishlistItem {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trekId    String
+  trek      Trek     @relation(fields: [trekId], references: [id], onDelete: Cascade)
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, trekId])
+  @@index([userId])
+  @@map("wishlist_items")
+}
+
+// ─────────────────────────────────────────────────────────────
+//  NOTIFICATION
+// ─────────────────────────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String                              // "booking_confirmed", "review_reply", etc.
+  title     String
+  body      String
+  isRead    Boolean  @default(false)
+  readAt    DateTime?
+  actionUrl String?                             // Deep link
+  meta      Json?                               // Extra context
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PROMO CODE
+// ─────────────────────────────────────────────────────────────
+
+model PromoCode {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  description     String?
+  discountPercent Float?                        // % off total
+  discountFixed   Float?                        // Fixed USD off
+  maxUses         Int?
+  usedCount       Int       @default(0)
+  minBookingUsd   Float?                        // Minimum booking amount
+  validFrom       DateTime
+  validUntil      DateTime
+  isActive        Boolean   @default(true)
+  trekIds         String[]                      // Empty = all treks
+
+  createdAt       DateTime  @default(now())
+
+  @@index([code])
+  @@index([isActive])
+  @@map("promo_codes")
+}
